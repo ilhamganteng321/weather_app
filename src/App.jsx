@@ -5,21 +5,15 @@ export default function App() {
   const [status, setStatus] = useState("Menunggu aksi...");
   const [coords, setCoords] = useState(null);
   const [address, setAddress] = useState(null);
-  const [adm4, setAdm4] = useState("");
+  const [currentWeather, setCurrentWeather] = useState(null);
   const [forecast, setForecast] = useState(null);
   const [error, setError] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState([]);
   const [showSearchResults, setShowSearchResults] = useState(false);
 
-  // Normalize strings for matching
-  const normalize = (s = "") =>
-    s
-      .toLowerCase()
-      .normalize("NFKD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/[^a-z0-9\s]/g, "")
-      .trim();
+  // OpenWeatherMap API key - You need to get this from openweathermap.org
+  const API_KEY = "YOUR_API_KEY_HERE"; // Replace with your actual API key
 
   // Step 1: get geolocation
   const askLocation = () => {
@@ -36,7 +30,7 @@ export default function App() {
         const { latitude, longitude } = pos.coords;
         setCoords({ lat: latitude, lon: longitude });
         setStatus(`Lokasi diperoleh: ${latitude.toFixed(5)}, ${longitude.toFixed(5)}`);
-        reverseGeocode(latitude, longitude);
+        fetchWeatherData(latitude, longitude);
       },
       (err) => {
         setError("Izin lokasi ditolak atau error: " + err.message);
@@ -47,170 +41,78 @@ export default function App() {
     );
   };
 
-  // Step 2: reverse geocode using Nominatim
-  const reverseGeocode = async (lat, lon) => {
+  // Step 2: fetch weather data from OpenWeatherMap
+  const fetchWeatherData = async (lat, lon) => {
     try {
-      setStatus("Mencari alamat (reverse geocode)...");
-      const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&accept-language=id`;
-      const res = await fetch(url, { headers: { "User-Agent": "weather-app-example/1.0" } });
-      if (!res.ok) throw new Error(`Reverse geocode error ${res.status}`);
-      const data = await res.json();
-      const addr = data.address || {};
+      setStatus("Mengambil data cuaca dari OpenWeatherMap...");
       
-      const result = {
-        display_name: data.display_name,
-        village: addr.village || addr.hamlet || addr.suburb || addr.neighbourhood || addr.town,
-        district: addr.county || addr.city || addr.municipality || addr.town || "",
-        subdistrict: addr.suburb || addr.city_district || addr.village || "",
-        city: addr.city || addr.town || addr.municipality || addr.county || "",
-        province: addr.state || "",
-      };
-      setAddress(result);
-      setStatus("Alamat ditemukan: " + (result.display_name || "—"));
-      tryResolveAdm4(result);
-    } catch (e) {
-      console.error("Reverse geocode failed", e);
-      setError("Gagal reverse geocode: " + e.message);
-      setLoading(false);
-      setStatus("Gagal reverse geocode");
-    }
-  };
-
-  // Step 3: try to resolve adm4 via wilayah.id
-  const tryResolveAdm4 = async (addr) => {
-    setStatus("Mencari kode wilayah (adm4) otomatis...");
-    try {
-      // Get provinces and find matching province code
-      const provRes = await fetch("https://wilayah.id/api/provinces.json");
-      if (!provRes.ok) throw new Error("Gagal ambil provinces.json");
-      const provJson = await provRes.json();
-      const provMatches = provJson.data || [];
-      const provNameNormalized = normalize(addr.province || "");
-
-      // Find best province match
-      let prov = provMatches.find((p) => normalize(p.name).includes(provNameNormalized) || provNameNormalized.includes(normalize(p.name)));
-      if (!prov && provNameNormalized) {
-        prov = provMatches.find((p) => normalize(p.name).split(" ")[0] === provNameNormalized.split(" ")[0]);
-      }
-      if (!prov) {
-        setError("Provinsi tidak ditemukan. Silakan cari manual.");
+      // Check if API key is set
+      if (API_KEY === "YOUR_API_KEY_HERE") {
+        setError("API Key OpenWeatherMap belum diatur. Silakan daftar di openweathermap.org untuk mendapatkan API key gratis.");
         setLoading(false);
-        return;
-      }
-      
-      const provCode = prov?.code;
-      
-      // Get regencies (kab/kota)
-      const regRes = await fetch(`https://wilayah.id/api/regencies/${provCode}.json`);
-      if (!regRes.ok) throw new Error("Gagal ambil regencies");
-      const regJson = await regRes.json();
-      const regMatches = regJson.data || [];
-      const cityName = normalize(addr.city || addr.county || addr.district || "");
-      let reg = regMatches.find((r) => normalize(r.name).includes(cityName) || cityName.includes(normalize(r.name)));
-      if (!reg && cityName) {
-        reg = regMatches.find((r) => normalize(r.name).split(" ")[0] === cityName.split(" ")[0]);
-      }
-      if (!reg) {
-        setError("Kabupaten/Kota tidak ditemukan. Silakan cari manual.");
-        setLoading(false);
+        setStatus("API Key diperlukan");
         return;
       }
 
-      const regCode = reg?.code;
-      
-      // Get districts (kecamatan)
-      const distRes = await fetch(`https://wilayah.id/api/districts/${regCode}.json`);
-      if (!distRes.ok) throw new Error("Gagal ambil districts");
-      const distJson = await distRes.json();
-      const distMatches = distJson.data || [];
-      const kecName = normalize(addr.subdistrict || addr.village || addr.city || "");
-      let dist = distMatches.find((d) => normalize(d.name).includes(kecName) || kecName.includes(normalize(d.name)));
-      if (!dist && kecName) {
-        dist = distMatches.find((d) => normalize(d.name).split(" ")[0] === kecName.split(" ")[0]);
-      }
-      if (!dist) {
-        setError("Kecamatan tidak ditemukan. Silakan cari manual.");
-        setLoading(false);
-        return;
-      }
-      
-      const distCode = dist?.code;
-      
-      // Get villages
-      const villRes = await fetch(`https://wilayah.id/api/villages/${distCode}.json`);
-      if (!villRes.ok) throw new Error("Gagal ambil villages");
-      const villJson = await villRes.json();
-      const villMatches = villJson.data || [];
-      const villageName = normalize(addr.village || addr.subdistrict || addr.county || "");
-      let vill = villMatches.find((v) => normalize(v.name).includes(villageName) || villageName.includes(normalize(v.name)));
-      if (!vill && villageName) {
-        vill = villMatches.find((v) => normalize(v.name).split(" ")[0] === villageName.split(" ")[0]);
-      }
-      
-      if (!vill) {
-        setError("Desa/Kelurahan tidak ditemukan. Silakan cari manual.");
-        setLoading(false);
-        return;
-      }
+      // Fetch current weather
+      const currentUrl = `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${API_KEY}&units=metric&lang=id`;
+      const currentRes = await fetch(currentUrl);
+      if (!currentRes.ok) throw new Error(`Current weather API error ${currentRes.status}`);
+      const currentData = await currentRes.json();
+      setCurrentWeather(currentData);
 
-      setAdm4(vill.code);
-      setStatus(`Kode adm4 terdeteksi: ${vill.code} — ${vill.name}`);
-      await fetchBMKG(vill.code);
-    } catch (e) {
-      console.error("Resolve adm4 failed", e);
-      setError("Auto-detect adm4 gagal: " + e.message);
-      setStatus("Auto-detect adm4 gagal — silakan cari lokasi manual.");
-      setLoading(false);
-    }
-  };
+      // Fetch 5-day forecast
+      const forecastUrl = `https://api.openweathermap.org/data/2.5/forecast?lat=${lat}&lon=${lon}&appid=${API_KEY}&units=metric&lang=id`;
+      const forecastRes = await fetch(forecastUrl);
+      if (!forecastRes.ok) throw new Error(`Forecast API error ${forecastRes.status}`);
+      const forecastData = await forecastRes.json();
+      setForecast(forecastData);
 
-  // Step 4: fetch BMKG forecast
-  const fetchBMKG = async (kode) => {
-    try {
-      setStatus("Mengambil data prakiraan cuaca dari BMKG...");
-      // Using a proxy to avoid CORS issues
-      const proxyUrl = "https://cors-anywhere.herokuapp.com/";
-      const targetUrl = `https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4=${encodeURIComponent(kode)}`;
-      const res = await fetch(proxyUrl + targetUrl, {
-        headers: {
-          'X-Requested-With': 'XMLHttpRequest'
-        }
+      // Set address from OpenWeatherMap data
+      setAddress({
+        display_name: `${currentData.name}, ${currentData.sys.country}`,
+        city: currentData.name,
+        country: currentData.sys.country
       });
-      if (!res.ok) throw new Error(`BMKG API error ${res.status}`);
-      const body = await res.json();
-      setForecast(body);
-      setStatus("Data prakiraan cuaca berhasil diambil.");
+
+      setStatus("Data cuaca berhasil diambil dari OpenWeatherMap.");
       setLoading(false);
     } catch (e) {
-      console.error("BMKG fetch failed", e);
-      setError("Gagal mengambil data BMKG: " + e.message);
+      console.error("OpenWeatherMap fetch failed", e);
+      setError("Gagal mengambil data OpenWeatherMap: " + e.message);
       setLoading(false);
-      setStatus("Gagal memuat prakiraan cuaca.");
+      setStatus("Gagal memuat data cuaca.");
     }
   };
 
-  // Manual fetch when user types adm4 and presses button
-  const manualFetch = async () => {
-    if (!adm4) {
-      setError("Masukkan kode adm4 dulu.");
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    await fetchBMKG(adm4);
-  };
-
-  // Search for locations
+  // Search for locations using OpenWeatherMap Geocoding API
   const searchLocation = async (query) => {
     if (!query || query.length < 3) return;
     
     try {
       setStatus("Mencari lokasi...");
-      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&countrycodes=id&accept-language=id`;
-      const res = await fetch(url, { headers: { "User-Agent": "weather-app-example/1.0" } });
+      
+      if (API_KEY === "YOUR_API_KEY_HERE") {
+        setError("API Key diperlukan untuk pencarian lokasi.");
+        return;
+      }
+
+      const url = `https://api.openweathermap.org/geo/1.0/direct?q=${encodeURIComponent(query)}&limit=5&appid=${API_KEY}`;
+      const res = await fetch(url);
       if (!res.ok) throw new Error(`Search error ${res.status}`);
       const data = await res.json();
-      setSearchResults(data.slice(0, 5));
+      
+      // Transform data to match our interface
+      const transformedResults = data.map(item => ({
+        display_name: `${item.name}, ${item.state ? item.state + ', ' : ''}${item.country}`,
+        lat: item.lat.toString(),
+        lon: item.lon.toString(),
+        name: item.name,
+        country: item.country,
+        state: item.state
+      }));
+      
+      setSearchResults(transformedResults);
       setShowSearchResults(true);
       setStatus(`${data.length} hasil ditemukan untuk "${query}"`);
     } catch (e) {
@@ -223,58 +125,136 @@ export default function App() {
   const handleSearchSelect = (result) => {
     setSearchQuery(result.display_name);
     setShowSearchResults(false);
-    setCoords({ lat: parseFloat(result.lat), lon: parseFloat(result.lon) });
+    const lat = parseFloat(result.lat);
+    const lon = parseFloat(result.lon);
+    setCoords({ lat, lon });
     setStatus(`Lokasi dipilih: ${result.display_name}`);
-    reverseGeocode(parseFloat(result.lat), parseFloat(result.lon));
+    setLoading(true);
+    fetchWeatherData(lat, lon);
   };
 
-  // Render forecast data
+  // Format date
+  const formatDate = (timestamp) => {
+    return new Date(timestamp * 1000).toLocaleDateString('id-ID', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+  };
+
+  const formatTime = (timestamp) => {
+    return new Date(timestamp * 1000).toLocaleTimeString('id-ID', {
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  // Get weather icon URL
+  const getIconUrl = (iconCode) => {
+    return `https://openweathermap.org/img/wn/${iconCode}@2x.png`;
+  };
+
+  // Group forecast by day
+  const groupForecastByDay = () => {
+    if (!forecast || !forecast.list) return [];
+    
+    const grouped = {};
+    forecast.list.forEach(item => {
+      const date = new Date(item.dt * 1000).toDateString();
+      if (!grouped[date]) {
+        grouped[date] = [];
+      }
+      grouped[date].push(item);
+    });
+    
+    return Object.entries(grouped).slice(0, 5); // Show 5 days
+  };
+
+  // Render current weather
+  const renderCurrentWeather = () => {
+    if (!currentWeather) return null;
+    
+    return (
+      <div className="bg-gradient-to-br from-blue-500 to-blue-700 text-white p-6 rounded-xl shadow-lg mb-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-2xl font-bold">{currentWeather.name}, {currentWeather.sys.country}</h2>
+            <p className="text-blue-100 capitalize">{currentWeather.weather[0].description}</p>
+            <div className="flex items-center mt-2">
+              <span className="text-4xl font-bold">{Math.round(currentWeather.main.temp)}°C</span>
+              <img 
+                src={getIconUrl(currentWeather.weather[0].icon)} 
+                alt={currentWeather.weather[0].description}
+                className="w-16 h-16 ml-2"
+              />
+            </div>
+          </div>
+          <div className="text-right">
+            <p className="text-blue-100">Terasa seperti {Math.round(currentWeather.main.feels_like)}°C</p>
+            <p className="text-blue-100">Kelembaban: {currentWeather.main.humidity}%</p>
+            <p className="text-blue-100">Angin: {Math.round(currentWeather.wind.speed * 3.6)} km/j</p>
+            <p className="text-blue-100">Tekanan: {currentWeather.main.pressure} hPa</p>
+          </div>
+        </div>
+        <div className="flex justify-between mt-4 text-sm text-blue-100">
+          <span>Matahari terbit: {formatTime(currentWeather.sys.sunrise)}</span>
+          <span>Matahari terbenam: {formatTime(currentWeather.sys.sunset)}</span>
+        </div>
+      </div>
+    );
+  };
+
+  // Render forecast
   const renderForecast = () => {
     if (!forecast) return null;
-    const lokasi = forecast.lokasi || forecast.data?.[0]?.lokasi || {};
-    const cuaca = forecast.data?.[0]?.cuaca || [];
+    
+    const groupedForecast = groupForecastByDay();
     
     return (
       <div className="space-y-4">
-        <div className="p-4 bg-white rounded-lg shadow-md">
-          <h2 className="text-xl font-semibold text-gray-800">
-            {lokasi.desa ? `${lokasi.desa}, ` : ""}
-            {lokasi.kecamatan ? `${lokasi.kecamatan}, ` : ""}
-            {lokasi.kotkab ? `${lokasi.kotkab}, ` : ""}
-            {lokasi.provinsi || ""}
-          </h2>
-          <p className="text-sm text-gray-600">Kode Wilayah: {lokasi.adm4 || adm4}</p>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {cuaca.map((hari, idx) => (
-            <div key={idx} className="bg-white rounded-lg shadow-md p-4">
-              <h3 className="font-medium text-lg text-center mb-3 text-blue-600">Hari ke-{idx + 1}</h3>
-              <div className="space-y-3">
-                {Array.isArray(hari) &&
-                  hari.map((slot, sidx) => (
-                    <div key={sidx} className="border border-gray-200 p-3 rounded-lg">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <div className="text-sm text-gray-700 font-medium">{slot.local_datetime || slot.datetime}</div>
-                          <div className="font-semibold text-gray-800">{slot.weather_desc}</div>
-                        </div>
-                        {slot.image && (
-                          <img src={slot.image} alt={slot.weather_desc} className="w-12 h-12" />
-                        )}
-                      </div>
-                      <div className="mt-2 text-sm text-gray-600">
-                        <div>Suhu: {slot.t}°C</div>
-                        <div>Kelembaban: {slot.hu}%</div>
-                        <div>Curah Hujan: {slot.tp} mm</div>
-                        <div>Angin: {slot.wd} {slot.ws} km/j</div>
-                        <div>Visibilitas: {slot.vs_text}</div>
-                      </div>
+        <h3 className="text-xl font-semibold text-gray-800">Prakiraan 5 Hari</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {groupedForecast.map(([date, items], idx) => {
+            const dayData = items[0]; // Use first item for daily overview
+            const minTemp = Math.min(...items.map(item => item.main.temp_min));
+            const maxTemp = Math.max(...items.map(item => item.main.temp_max));
+            
+            return (
+              <div key={idx} className="bg-white rounded-lg shadow-md p-4 border border-gray-200">
+                <h4 className="font-medium text-gray-800 text-center mb-3">
+                  {idx === 0 ? 'Hari ini' : formatDate(dayData.dt)}
+                </h4>
+                <div className="text-center mb-3">
+                  <img 
+                    src={getIconUrl(dayData.weather[0].icon)} 
+                    alt={dayData.weather[0].description}
+                    className="w-12 h-12 mx-auto"
+                  />
+                  <p className="text-sm text-gray-600 capitalize">{dayData.weather[0].description}</p>
+                </div>
+                <div className="text-center">
+                  <div className="flex justify-center items-center space-x-2">
+                    <span className="text-lg font-semibold text-gray-800">{Math.round(maxTemp)}°</span>
+                    <span className="text-lg text-gray-500">{Math.round(minTemp)}°</span>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">Kelembaban: {dayData.main.humidity}%</p>
+                </div>
+                
+                {/* Hourly forecast for the day */}
+                <div className="mt-3 space-y-1">
+                  <h5 className="text-xs font-medium text-gray-600 border-b border-gray-200 pb-1">Detail Jam:</h5>
+                  {items.slice(0, 4).map((item, hidx) => (
+                    <div key={hidx} className="flex justify-between items-center text-xs text-gray-600">
+                      <span>{formatTime(item.dt)}</span>
+                      <span>{Math.round(item.main.temp)}°C</span>
+                      <span className="capitalize">{item.weather[0].main}</span>
                     </div>
                   ))}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     );
@@ -284,9 +264,9 @@ export default function App() {
     <div className="min-h-screen bg-gradient-to-b from-blue-50 to-indigo-100 p-4 md:p-6">
       <div className="max-w-6xl mx-auto">
         <header className="mb-6 text-center">
-          <h1 className="text-3xl md:text-4xl font-bold text-blue-800">Weather Dashboard BMKG</h1>
+          <h1 className="text-3xl md:text-4xl font-bold text-blue-800">Weather Dashboard</h1>
           <p className="text-sm md:text-base text-gray-600 mt-2">
-            Dapatkan informasi cuaca terkini untuk lokasi Anda di Indonesia
+            Dapatkan informasi cuaca terkini dengan OpenWeatherMap
           </p>
         </header>
 
@@ -347,27 +327,25 @@ export default function App() {
               </div>
 
               <div className="border-t border-gray-200 pt-4">
-                <h3 className="font-medium text-gray-700 mb-2">Kode ADM4 Manual</h3>
-                <input
-                  value={adm4}
-                  onChange={(e) => setAdm4(e.target.value)}
-                  className="w-full rounded-lg border border-gray-300 px-4 py-2 mb-2"
-                  placeholder="Contoh: 31.71.03.1001"
-                />
-                <button 
-                  className="w-full bg-gray-800 text-white py-2 rounded-lg hover:bg-gray-900 transition-colors"
-                  onClick={manualFetch}
-                >
-                  Ambil Data BMKG
-                </button>
-              </div>
-
-              <div className="border-t border-gray-200 pt-4">
                 <h3 className="font-medium text-gray-700 mb-2">Status</h3>
                 <div className="bg-gray-100 p-3 rounded-lg">
                   <p className="text-sm text-gray-700">{status}</p>
                   {error && (
-                    <p className="text-sm text-red-600 mt-2 bg-red-50 p-2 rounded">Error: {error}</p>
+                    <div className="text-sm text-red-600 mt-2 bg-red-50 p-2 rounded">
+                      <div className="font-medium">Error:</div>
+                      <div>{error}</div>
+                      {API_KEY === "YOUR_API_KEY_HERE" && (
+                        <div className="mt-2 text-xs">
+                          <strong>Cara mendapatkan API Key:</strong>
+                          <ol className="list-decimal list-inside mt-1 space-y-1">
+                            <li>Kunjungi openweathermap.org</li>
+                            <li>Buat akun gratis</li>
+                            <li>Masuk ke API Keys</li>
+                            <li>Copy API key dan ganti di kode</li>
+                          </ol>
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>
@@ -376,15 +354,8 @@ export default function App() {
 
           {/* Main Content */}
           <section className="lg:col-span-3 bg-white p-4 md:p-6 rounded-xl shadow-lg">
-            <h2 className="font-semibold text-lg text-blue-700 mb-4">Prakiraan Cuaca</h2>
+            <h2 className="font-semibold text-lg text-blue-700 mb-4">Data Cuaca</h2>
             
-            {address && (
-              <div className="mb-4 p-3 border border-blue-200 rounded-lg bg-blue-50">
-                <div className="text-sm text-blue-700 font-medium">Alamat Terdeteksi:</div>
-                <div className="font-medium text-gray-800">{address.display_name}</div>
-              </div>
-            )}
-
             {loading ? (
               <div className="flex justify-center items-center h-64">
                 <div className="text-center">
@@ -395,8 +366,11 @@ export default function App() {
                   <p className="mt-4 text-gray-600">Memuat data cuaca...</p>
                 </div>
               </div>
-            ) : forecast ? (
-              renderForecast()
+            ) : currentWeather ? (
+              <div>
+                {renderCurrentWeather()}
+                {renderForecast()}
+              </div>
             ) : (
               <div className="text-center py-10 text-gray-500">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 mx-auto text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -409,7 +383,7 @@ export default function App() {
         </main>
 
         <footer className="mt-8 text-center text-xs text-gray-500">
-          <p>Data cuaca disediakan oleh BMKG. Data wilayah dari wilayah.id. Jika mengalami masalah CORS, gunakan extension CORS Unblock.</p>
+          <p>Data cuaca disediakan oleh OpenWeatherMap. API gratis dengan limit 1000 calls/hari.</p>
         </footer>
       </div>
     </div>
